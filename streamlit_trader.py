@@ -1,68 +1,61 @@
-
+# streamlit_trader.py
 import streamlit as st
-import time
-import requests
 from ib_insync import *
+import requests, time, threading
 import plotly.graph_objects as go
 
-# 初始化 API
+# --- 初始化 IB API ---
 ib = IB()
 ib.connect('127.0.0.1', 7497, clientId=1)
 
-# Telegram 设置
-BOT_TOKEN = '7715862737:AAFcTb78ZI_UzoTXXbBufodg1501TlqhPgk'
-CHAT_ID = '6128137477'
+# --- Telegram 设置 ---
+BOT_TOKEN = "YOUR_BOT_TOKEN"
+CHAT_ID = "YOUR_CHAT_ID"
 
 def send_alert(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     data = {'chat_id': CHAT_ID, 'text': msg}
     requests.post(url, data=data)
 
-# UI 布局
-st.set_page_config(page_title="iQuant 控制面板", layout="wide")
-st.title("📈 iQuant A.I. 自动交易系统")
+# --- 获取 TSLA 实时数据 ---
+contract = Stock('TSLA', 'SMART', 'USD')
+ib.qualifyContracts(contract)
 
-col1, col2 = st.columns(2)
+bars = []
 
-with col1:
-    st.subheader("⚙️ 策略控制")
-    start = st.button("开始交易")
-    stop = st.button("停止交易")
-    pnl_display = st.empty()
-
-with col2:
-    st.subheader("📊 实时图表")
-
-    # 模拟价格数据
-    bars = ib.reqHistoricalData(
-        Stock('TSLA', 'SMART', 'USD'),
-        endDateTime='',
-        durationStr='1 D',
-        barSizeSetting='5 mins',
-        whatToShow='TRADES',
-        useRTH=True
-    )
-    df = util.df(bars)
-
-    fig = go.Figure(data=[go.Candlestick(
-        x=df['date'],
-        open=df['open'],
-        high=df['high'],
-        low=df['low'],
-        close=df['close']
-    )])
-    fig.update_layout(title='TSLA 实时价格走势图', xaxis_title='时间', yaxis_title='价格')
-    st.plotly_chart(fig, use_container_width=True)
-
-# 模拟策略逻辑（用户自行替换）
-if start:
-    send_alert("🟢 策略已启动")
-    pnl = 0
-    for i in range(10):
-        pnl += 1.5  # 模拟盈利
-        pnl_display.metric(label="当前累计收益", value=f"${pnl:.2f}")
+def fetch_data():
+    global bars
+    while True:
+        bar = ib.reqMktData(contract, '', False, False)
         time.sleep(1)
-    send_alert(f"✅ 策略结束，总收益：${pnl:.2f}")
+        ticker = ib.ticker(contract)
+        if ticker.last:
+            bars.append({
+                'time': time.strftime('%H:%M:%S'),
+                'open': float(ticker.open or 0),
+                'high': float(ticker.high or 0),
+                'low': float(ticker.low or 0),
+                'close': float(ticker.last)
+            })
+            if len(bars) > 50:
+                bars = bars[-50:]
+        ib.sleep(1)
 
-if stop:
-    send_alert("⛔ 策略已手动停止")
+threading.Thread(target=fetch_data, daemon=True).start()
+
+# --- 前端 UI ---
+st.set_page_config(page_title="iQuant TSLA Trader", layout="wide")
+st.title("📈 iQuant - TSLA 实时图表")
+
+col1, col2 = st.columns([1, 2])
+col1.success("系统已启动。监听 TSLA 实时价格...")
+
+fig = go.Figure(data=go.Candlestick(
+    x=[b['time'] for b in bars],
+    open=[b['open'] for b in bars],
+    high=[b['high'] for b in bars],
+    low=[b['low'] for b in bars],
+    close=[b['close'] for b in bars]
+))
+fig.update_layout(title='TSLA 实时价格趋势', xaxis_title='时间', yaxis_title='价格')
+col2.plotly_chart(fig, use_container_width=True)
